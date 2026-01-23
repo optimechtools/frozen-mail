@@ -23,8 +23,19 @@
 
     <script type="text/babel">
     // 🔥 Firebase init
-    const firebaseConfig = CONFIG.FIREBASE_CONFIG;
-const GROQ_API_KEY = CONFIG.GROQ_API_KEY;
+    // Pull from the global window object created by config.js
+const firebaseConfig = window.CONFIG.FIREBASE_CONFIG;
+
+// Try config.js first, then fallback to LocalStorage (for when you push to GitHub)
+const GROQ_API_KEY = window.CONFIG.GROQ_API_KEY || localStorage.getItem('GROQ_API_KEY');
+
+if (!GROQ_API_KEY && !window.location.hostname.includes("localhost")) {
+    const userKey = prompt("Groq API Key not found. Please paste it here to save it to this browser:");
+    if (userKey) {
+        localStorage.setItem('GROQ_API_KEY', userKey);
+        window.location.reload();
+    }
+}
 
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
