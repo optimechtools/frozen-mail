@@ -24,13 +24,24 @@
     <script type="text/babel">
     // 🔥 Firebase init
     // Pull from the global window object created by config.js
-const firebaseConfig = window.CONFIG.FIREBASE_CONFIG;
+const firebaseConfig = {
+    apiKey: "AIzaSyClNbgejQS_AByKpU3zxtuu-BAvtLSEMyQ",
+    authDomain: "cold-dm-tracker.firebaseapp.com",
+    projectId: "cold-dm-tracker",
+    appId: "1:365206893580:web:df7ff65b11f22a91e2ea29",
+    storageBucket: "cold-dm-tracker.firebasestorage.app",
+    messagingSenderId: "365206893580"
+};
 
 // Try config.js first, then fallback to LocalStorage (for when you push to GitHub)
-const GROQ_API_KEY = window.CONFIG.GROQ_API_KEY || localStorage.getItem('GROQ_API_KEY');
+const config = window.CONFIG || {};
+const GROQ_API_KEY = "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" || localStorage.getItem('GROQ_API_KEY');
 
-if (!GROQ_API_KEY && !window.location.hostname.includes("localhost")) {
-    const userKey = prompt("Groq API Key not found. Please paste it here to save it to this browser:");
+// Initialize Firebase
+firebase.initializeApp(firebaseConfig);
+
+if (!GROQ_API_KEY) {
+    const userKey = prompt("No API Key found. Please enter your Groq API Key to use the AI features:");
     if (userKey) {
         localStorage.setItem('GROQ_API_KEY', userKey);
         window.location.reload();
