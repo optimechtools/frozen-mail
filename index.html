@@ -35,7 +35,7 @@ const firebaseConfig = {
 
 // Try config.js first, then fallback to LocalStorage (for when you push to GitHub)
 const config = window.CONFIG || {};
-const GROQ_API_KEY = "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" || localStorage.getItem('GROQ_API_KEY');
+const GROQ_API_KEY = "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" || localStorage.getItem('GROQ_API_KEY');
 
 // Initialize Firebase
 firebase.initializeApp(firebaseConfig);
@@ -171,6 +171,62 @@ const [isDuplicate, setIsDuplicate] = useState(false);
 const emailInputRef = React.useRef(null);
 const bodyInputRef = React.useRef(null);
         const [uploading, setUploading] = useState(false);
+        const [showOnlyUnsent, setShowOnlyUnsent] = useState(true);
+
+        const [apiKey, setApiKey] = useState(
+  GROQ_API_KEY
+);
+
+
+
+const normalizeEmail = (email) =>
+  email.trim().toLowerCase();
+
+const checkGlobalDuplicate = async (email) => {
+  console.log('🔍 Checking global duplicate for:', email);
+  const normalized = normalizeEmail(email);
+  console.log('📧 Normalized email:', normalized);
+  
+  try {
+    const ref = db.collection("global_emails").doc(normalized);
+    const snap = await ref.get();
+    
+    console.log('✅ Firestore read successful');
+    console.log('📄 Document exists?', snap.exists);
+    
+    if (snap.exists) {
+      console.log('📋 Document data:', snap.data());
+    }
+    
+    return snap.exists;
+  } catch (error) {
+    console.error('❌ Global duplicate check error:', error);
+    return false;
+  }
+};
+const registerGlobalEmail = async (email) => {
+  console.log('📝 Registering global email:', email);
+  const normalized = normalizeEmail(email);
+  console.log('📧 Normalized email:', normalized);
+  
+  try {
+    const ref = db.collection("global_emails").doc(normalized);
+    await ref.set(
+      {
+        firstSeen: firebase.firestore.FieldValue.serverTimestamp(),
+        accountId,
+        originalEmail: email
+      },
+      { merge: true }
+    );
+    console.log('✅ Global email registered successfully');
+  } catch (error) {
+    console.error('❌ Failed to register global email:', error);
+    throw error;
+  }
+};
+
+
 
         // Load leads from Firebase
         useEffect(() => {
@@ -230,15 +286,43 @@ useEffect(() => {
 
         // Calculate daily lead counts
         const dailyLeadCounts = useMemo(() => {
-            const counts = {};
-            leads.forEach(lead => {
-                const date = new Date(lead.createdAt).toLocaleDateString();
-                counts[date] = (counts[date] || 0) + 1;
-            });
-            return Object.entries(counts)
-                .map(([date, count]) => ({ date, count }))
-                .sort((a, b) => new Date(b.date) - new Date(a.date));
-        }, [leads]);
+  const source = showOnlyUnsent
+    ? leads.filter(l => !l.sent)
+    : leads;
+
+  const counts = {};
+  source.forEach(lead => {
+    const date = new Date(lead.createdAt).toLocaleDateString();
+    counts[date] = (counts[date] || 0) + 1;
+  });
+
+  return Object.entries(counts)
+    .map(([date, count]) => ({ date, count }))
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+}, [leads, showOnlyUnsent]);
+
+
+        const unsentCount = useMemo(
+  () => leads.filter(l => !l.sent).length,
+  [leads]
+);
+
+const dailySentCounts = useMemo(() => {
+  const counts = {};
+
+  leads
+    .filter(l => l.sent && l.sentAt)
+    .forEach(lead => {
+      const date = new Date(lead.sentAt).toLocaleDateString();
+      counts[date] = (counts[date] || 0) + 1;
+    });
+
+  return Object.entries(counts)
+    .map(([date, count]) => ({ date, count }))
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+}, [leads]);
+
+
 
         // Auto-focus on email field when on add screen
 useEffect(() => {
@@ -249,15 +333,42 @@ useEffect(() => {
 
 // Check for duplicate email
 useEffect(() => {
-    if (formData.email.trim()) {
-        const duplicate = leads.some(lead => 
-            lead.email.toLowerCase() === formData.email.toLowerCase()
-        );
-        setIsDuplicate(duplicate);
-    } else {
-        setIsDuplicate(false);
+  const email = formData.email.trim().toLowerCase();
+
+  if (!email) {
+    setIsDuplicate(false);
+    return;
+  }
+
+  // 1) Always check local synchronously
+  const localDup = leads.some(
+    l => l.email.toLowerCase() === email
+  );
+
+  if (localDup) {
+    setIsDuplicate(true);
+    return;
+  }
+
+  // 2) Then check global (async, non-blocking)
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const exists = await checkGlobalDuplicate(email);
+      if (!cancelled) {
+        setIsDuplicate(exists);
+      }
+    } catch (e) {
+      console.error("Global dup check failed", e);
     }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
 }, [formData.email, leads]);
+
 
 // 🔥 BACKUP SYSTEM - Saves to localStorage every time leads change
 useEffect(() => {
@@ -308,6 +419,27 @@ useEffect(() => {
     }
 }, [loaded, accountId]); // Only runs once when loaded
 
+useEffect(() => {
+  if (currentScreen === 'add') {
+    const interval = setInterval(() => {
+      if (emailInputRef.current) emailInputRef.current.focus();
+    }, 800);
+    return () => clearInterval(interval);
+  }
+}, [currentScreen]);
+
+useEffect(() => {
+  const handler = async (e) => {
+    if (currentScreen !== 'add') return;
+    if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+      await handlePastePhoto();
+    }
+  };
+  window.addEventListener("keydown", handler);
+  return () => window.removeEventListener("keydown", handler);
+}, [currentScreen, formData]);
+
+
         const handlePastePhoto = async () => {
     try {
         const clipboardItems = await navigator.clipboard.read();
@@ -346,7 +478,7 @@ useEffect(() => {
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${GROQ_API_KEY}`,
+                 'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
@@ -389,18 +521,23 @@ BODY:
 
         // Parse the response
         const subjectMatch = content.match(/SUBJECT:\s*(.+?)(?:\n|$)/i);
-        const bodyMatch = content.match(/BODY:\s*([\s\S]+)/i);
+const bodyMatch = content.match(/BODY:\s*([\s\S]+)/i);
 
-        return {
-            subject: subjectMatch ? subjectMatch[1].trim() : 'Follow-up',
-            body: bodyMatch ? bodyMatch[1].trim() : content
-        };
+let subject = subjectMatch ? subjectMatch[1].trim() : 'Follow-up';
+let body = bodyMatch ? bodyMatch[1].trim() : content;
+
+// 🔥 CLEANUP: remove accidental SUBJECT inside BODY
+body = body.replace(/^SUBJECT:\s*.+\n*/i, '').trim();
+
+return { subject, body };
+
     } catch (err) {
         console.error('Groq API error:', err);
         alert('Failed to generate email: ' + err.message);
         return null;
     }
-};const handleSubmit = async () => {
+};
+const handleSubmit = async () => {
     if (!formData.email.trim()) {
         alert('Please enter a lead email address');
         return;
@@ -419,7 +556,7 @@ BODY:
     setUploading(true);
     setGeneratingEmail(true);
     try {
-        // Convert photo to base64 instead of uploading to Firebase
+        // Convert photo to base64
         const reader = new FileReader();
         const base64Promise = new Promise((resolve, reject) => {
             reader.onload = () => resolve(reader.result);
@@ -429,7 +566,7 @@ BODY:
         
         const base64Image = await base64Promise;
 
-        // Generate email with Groq using base64 image
+        // Generate email with Groq
         const emailContent = await generateEmailWithGroq(base64Image);
         
         if (!emailContent) {
@@ -438,9 +575,15 @@ BODY:
             return;
         }
 
+        // 🔥 REGISTER GLOBAL EMAIL FIRST (before creating lead)
+        console.log('🚀 About to register global email...');
+        await registerGlobalEmail(formData.email);
+        console.log('✅ Global email registered!');
+
+        // Now create the lead
         const newLead = {
             email: formData.email,
-            photoUrl: formData.photoUrl, // Use local blob URL for display
+            photoUrl: formData.photoUrl,
             subject: emailContent.subject,
             body: emailContent.body,
             id: Date.now(),
@@ -620,6 +763,25 @@ BODY:
                 <label className="block text-sm font-medium text-slate-700 mb-2">
                     Your Cold Email Framework Prompt
                 </label>
+                <div>
+  <label className="block text-sm font-medium text-slate-700 mb-2">
+    Groq API Key (Backup)
+  </label>
+  <input
+    type="password"
+    value={apiKey}
+    onChange={(e) => {
+      setApiKey(e.target.value);
+      localStorage.setItem("GROQ_API_KEY", e.target.value);
+    }}
+    className="w-full px-4 py-2 border rounded-lg"
+    placeholder="gsk_..."
+  />
+  <p className="text-xs text-slate-500 mt-1">
+    Stored locally. Used automatically if main key fails.
+  </p>
+</div>
+
                 <textarea 
                     value={emailPrompt} 
                     onChange={(e) => setEmailPrompt(e.target.value)}
@@ -736,15 +898,40 @@ You are a cold email expert. Write emails that:
     /* LEAD LIST SCREEN - keep existing code */
     <>
         {dailyLeadCounts.length > 0 && (
-                                <div className="bg-white rounded-xl shadow-lg p-6 mb-8 border border-slate-200">
+                                <div
+  className={`rounded-xl shadow-lg p-6 mb-8 border transition ${
+    showOnlyUnsent
+      ? "bg-amber-50 border-amber-300"
+      : "bg-white border-slate-200"
+  }`}
+>
+
                                     <div className="flex items-center space-x-2 mb-4">
                                         <Calendar className="w-5 h-5 text-blue-600" />
-                                        <h2 className="text-lg font-bold text-slate-900">Daily Lead Counter</h2>
+                                        <h2
+  className={`text-lg font-bold ${
+    showOnlyUnsent ? "text-amber-600" : "text-slate-900"
+  }`}
+>
+  {showOnlyUnsent ? "Daily Unsent Leads" : "Daily Lead Counter"}
+</h2>
+
                                     </div>
                                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
                                         {dailyLeadCounts.map(({ date, count }) => (
-                                            <div key={date} className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 text-center">
-                                                <p className="text-2xl font-bold text-blue-600">{count}</p>
+                                            <div
+  className={`rounded-lg p-4 text-center transition ${
+    showOnlyUnsent
+      ? "bg-gradient-to-br from-amber-50 to-amber-100"
+      : "bg-gradient-to-br from-blue-50 to-blue-100"
+  }`}
+>
+
+                                                <p
+  className={`text-2xl font-bold transition ${
+    showOnlyUnsent ? "text-amber-600" : "text-blue-600"
+  }`}
+>{count}</p>
                                                 <p className="text-xs text-slate-600 mt-1">{date}</p>
                                             </div>
                                         ))}
@@ -754,8 +941,60 @@ You are a cold email expert. Write emails that:
 
                             <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
                                 <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
-                                    <h2 className="text-lg font-bold text-slate-900">Leads ({leads.length})</h2>
+                                    <div className="flex items-center justify-between">
+<h2
+  className={`text-lg font-bold ${
+    showOnlyUnsent ? "text-amber-600" : "text-slate-900"
+  }`}
+>
+  {showOnlyUnsent
+    ? `Unsent Leads (${unsentCount})`
+    : `Leads (${leads.length})`}
+</h2>
+
+  <button
+  onClick={() => setShowOnlyUnsent(!showOnlyUnsent)}
+  className={`text-sm px-3 py-1 rounded transition ${
+    showOnlyUnsent
+      ? "bg-amber-100 text-amber-700"
+      : "bg-slate-200 hover:bg-slate-300"
+  }`}
+>
+  {showOnlyUnsent ? "Showing Unsent" : "Show Only Unsent"}
+</button>
+
+</div>
+
                                 </div>
+
+                                {dailySentCounts.length > 0 && (
+  <div className="bg-white rounded-xl shadow-lg p-6 mb-8 border border-slate-200">
+    <div className="flex items-center space-x-2 mb-4">
+      <Send className="w-5 h-5 text-green-600" />
+      <h2 className="text-lg font-bold text-green-700">
+        Daily Emails Sent
+      </h2>
+    </div>
+
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      {dailySentCounts.map(({ date, count }) => (
+        <div
+          key={date}
+          className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 text-center"
+        >
+          <p className="text-2xl font-bold text-green-600">
+            {count}
+          </p>
+          <p className="text-xs text-slate-600 mt-1">
+            {date}
+          </p>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
+
+
                                 {leads.length === 0 ? (
                                     <div className="p-12 text-center">
                                         <Mail className="w-16 h-16 text-slate-300 mx-auto mb-4" />
@@ -764,7 +1003,8 @@ You are a cold email expert. Write emails that:
                                     </div>
                                 ) : (
                                     <div className="divide-y divide-slate-200">
-                                        {leads.map(lead => (
+                                        {(showOnlyUnsent ? leads.filter(l => !l.sent) : leads).map(lead => (
+
                                             <div key={lead.id} className="p-6 hover:bg-slate-50 transition">
                                                 <div className="flex items-start justify-between gap-4">
                                                     <div className="flex items-start space-x-4 flex-1 min-w-0">
@@ -777,7 +1017,15 @@ You are a cold email expert. Write emails that:
                                                         )}
                                                         <div className="flex-1 min-w-0">
                                                             <div className="flex items-center space-x-3 mb-3">
-                                                                <h3 className="text-xl font-bold text-slate-900">{lead.email}</h3>
+                                                                <div className="flex items-center space-x-2">
+  <h3 className="text-xl font-bold text-slate-900">{lead.email}</h3>
+  {lead.sent && (
+    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
+      SENT
+    </span>
+  )}
+</div>
+
                                                                 <span className="text-xs text-slate-500">
                                                                     {new Date(lead.createdAt).toLocaleDateString()}
                                                                 </span>
